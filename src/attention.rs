@@ -29,7 +29,7 @@ pub struct Attention {
 impl Attention {
     pub fn from_path(
         path: &str,
-        tensor_map: &HashMap<String, &Tensor>,
+        tensor_map: &HashMap<String, Tensor>,
         config: &Config,
         scale: bool,
     ) -> Self {

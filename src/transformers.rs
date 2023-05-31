@@ -26,7 +26,7 @@ struct Mlp {
 }
 
 impl Mlp {
-    pub fn from_path(path: &str, tensor_map: &HashMap<String, &Tensor>) -> Self {
+    pub fn from_path(path: &str, tensor_map: &HashMap<String, Tensor>) -> Self {
         let c_fc_weight = tensor_map
             .get(&format!("{}.c_fc.weight", path))
             .unwrap_or_else(|| panic!("failed to get {}.c_fc.weight", path));
@@ -74,7 +74,7 @@ pub struct LayerNorm {
 }
 
 impl LayerNorm {
-    pub fn from_path(path: &str, tensor_map: &HashMap<String, &Tensor>, eps: Option<f64>) -> Self {
+    pub fn from_path(path: &str, tensor_map: &HashMap<String, Tensor>, eps: Option<f64>) -> Self {
         let weight = tensor_map
             .get(&format!("{}.weight", path))
             .unwrap_or_else(|| panic!("failed to get {}.weight", path));
@@ -108,7 +108,7 @@ pub struct Block {
 }
 
 impl Block {
-    fn from_path(path: &str, tensor_map: &HashMap<String, &Tensor>, config: &Config) -> Self {
+    fn from_path(path: &str, tensor_map: &HashMap<String, Tensor>, config: &Config) -> Self {
         let ln_1 = LayerNorm::from_path(
             &format!("{}.ln_1", path),
             tensor_map,
@@ -176,7 +176,7 @@ pub struct GPT2Model {
 }
 
 impl GPT2Model {
-    fn new(tensor_map: &HashMap<String, &Tensor>, config: &Config) -> Self {
+    fn new(tensor_map: &HashMap<String, Tensor>, config: &Config) -> Self {
         let wte = Embedding {
             ws: tensor_map
                 .get("wte.weight")
@@ -336,7 +336,7 @@ pub struct GPT2LMHeadModel {
 }
 
 impl GPT2LMHeadModel {
-    pub fn new(tensor_map: &HashMap<String, &Tensor>, config: &Config) -> Self {
+    pub fn new(tensor_map: &HashMap<String, Tensor>, config: &Config) -> Self {
         let transformer = GPT2Model::new(tensor_map, config);
         let lm_head = GPT2LMHead::new(&transformer.wte.ws);
 
