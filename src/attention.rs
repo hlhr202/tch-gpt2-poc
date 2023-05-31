@@ -33,11 +33,21 @@ impl Attention {
         config: &Config,
         scale: bool,
     ) -> Self {
-        let bias = tensor_map.get(&format!("{}.bias", path)).unwrap();
-        let c_attn_weight = tensor_map.get(&format!("{}.c_attn.weight", path)).unwrap();
-        let c_attn_bias = tensor_map.get(&format!("{}.c_attn.bias", path)).unwrap();
-        let c_proj_weight = tensor_map.get(&format!("{}.c_proj.weight", path)).unwrap();
-        let c_proj_bias = tensor_map.get(&format!("{}.c_proj.bias", path)).unwrap();
+        let bias = tensor_map
+            .get(&format!("{}.bias", path))
+            .unwrap_or_else(|| panic!("failed to get {}.bias", path));
+        let c_attn_weight = tensor_map
+            .get(&format!("{}.c_attn.weight", path))
+            .unwrap_or_else(|| panic!("failed to get {}.c_attn.weight", path));
+        let c_attn_bias = tensor_map
+            .get(&format!("{}.c_attn.bias", path))
+            .unwrap_or_else(|| panic!("failed to get {}.c_attn.bias", path));
+        let c_proj_weight = tensor_map
+            .get(&format!("{}.c_proj.weight", path))
+            .unwrap_or_else(|| panic!("failed to get {}.c_proj.weight", path));
+        let c_proj_bias = tensor_map
+            .get(&format!("{}.c_proj.bias", path))
+            .unwrap_or_else(|| panic!("failed to get {}.c_proj.bias", path));
 
         let c_attn = Conv1D {
             weight: c_attn_weight.shallow_clone(),
@@ -85,7 +95,12 @@ impl Attention {
     ) -> Tensor {
         let mut w = query.matmul(key);
         if self.scale {
-            w /= (*value.size().last().unwrap() as f64).sqrt();
+            w /= (*value
+                .size()
+                .last()
+                .unwrap_or_else(|| panic!("failed to get last value in attention"))
+                as f64)
+                .sqrt();
         }
 
         let (nd, ns) = (w.size()[2], w.size()[3]);

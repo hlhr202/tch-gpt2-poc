@@ -27,10 +27,18 @@ struct Mlp {
 
 impl Mlp {
     pub fn from_path(path: &str, tensor_map: &HashMap<String, &Tensor>) -> Self {
-        let c_fc_weight = tensor_map.get(&format!("{}.c_fc.weight", path)).unwrap();
-        let c_fc_bias = tensor_map.get(&format!("{}.c_fc.bias", path)).unwrap();
-        let c_proj_weight = tensor_map.get(&format!("{}.c_proj.weight", path)).unwrap();
-        let c_proj_bias = tensor_map.get(&format!("{}.c_proj.bias", path)).unwrap();
+        let c_fc_weight = tensor_map
+            .get(&format!("{}.c_fc.weight", path))
+            .unwrap_or_else(|| panic!("failed to get {}.c_fc.weight", path));
+        let c_fc_bias = tensor_map
+            .get(&format!("{}.c_fc.bias", path))
+            .unwrap_or_else(|| panic!("failed to get {}.c_fc.bias", path));
+        let c_proj_weight = tensor_map
+            .get(&format!("{}.c_proj.weight", path))
+            .unwrap_or_else(|| panic!("failed to get {}.c_proj.weight", path));
+        let c_proj_bias = tensor_map
+            .get(&format!("{}.c_proj.bias", path))
+            .unwrap_or_else(|| panic!("failed to get {}.c_proj.bias", path));
 
         let c_fc = Conv1D {
             weight: c_fc_weight.shallow_clone(),
@@ -52,8 +60,9 @@ impl Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Tensor {
-        let h = (self.activation.0)(&xs.apply(&self.c_fc));
-        h.apply(&self.c_proj)
+        let activation = &self.activation.0;
+        let h = activation(&self.c_fc.forward(xs));
+        self.c_proj.forward(&h)
     }
 }
 
@@ -66,8 +75,12 @@ pub struct LayerNorm {
 
 impl LayerNorm {
     pub fn from_path(path: &str, tensor_map: &HashMap<String, &Tensor>, eps: Option<f64>) -> Self {
-        let weight = tensor_map.get(&format!("{}.weight", path)).unwrap();
-        let bias = tensor_map.get(&format!("{}.bias", path)).unwrap();
+        let weight = tensor_map
+            .get(&format!("{}.weight", path))
+            .unwrap_or_else(|| panic!("failed to get {}.weight", path));
+        let bias = tensor_map
+            .get(&format!("{}.bias", path))
+            .unwrap_or_else(|| panic!("failed to get {}.bias", path));
 
         Self {
             weight: weight.shallow_clone(),
@@ -165,11 +178,17 @@ pub struct GPT2Model {
 impl GPT2Model {
     fn new(tensor_map: &HashMap<String, &Tensor>, config: &Config) -> Self {
         let wte = Embedding {
-            ws: tensor_map.get("wte.weight").unwrap().shallow_clone(),
+            ws: tensor_map
+                .get("wte.weight")
+                .unwrap_or_else(|| panic!("failed to get wte.weight"))
+                .shallow_clone(),
             config: Default::default(),
         };
         let wpe = Embedding {
-            ws: tensor_map.get("wpe.weight").unwrap().shallow_clone(),
+            ws: tensor_map
+                .get("wpe.weight")
+                .unwrap_or_else(|| panic!("failed to get wpe.weight"))
+                .shallow_clone(),
             config: Default::default(),
         };
         let h = (0..config.n_layer)
@@ -220,7 +239,7 @@ impl GPT2Model {
 
         let input_shape = input_ids.size();
         let input_seq_length = input_shape[1];
-        let input_batch_size = input_shape[0];
+        // let input_batch_size = input_shape[0];
 
         let position_ids = match position_ids {
             Some(value) => value.copy(),
@@ -232,22 +251,11 @@ impl GPT2Model {
             .unsqueeze(0),
         };
 
-        let input_ids = input_ids.view((input_batch_size * input_seq_length, input_seq_length));
-
-        let position_shape = position_ids.size();
-        let position_seq_length = position_shape[1];
-        let position_batch_size = position_shape[0];
-
-        let position_ids = position_ids.view((
-            position_batch_size * position_seq_length,
-            position_seq_length,
-        ));
-
-        let inputs_embeds = self.wte.forward(&input_ids);
+        let inputs_embeds = self.wte.forward(input_ids);
         let position_embeds = self.wpe.forward(&position_ids);
 
         let token_type_embeds = match token_type_ids {
-            Some(value) => value.apply(&self.wte),
+            Some(value) => self.wte.forward(value),
             None => Tensor::zeros_like(&position_embeds),
         };
 
@@ -305,7 +313,7 @@ pub struct GPT2LMHead {
 }
 
 impl GPT2LMHead {
-    fn new(model_embeddings_weights: &Tensor, config: &Config) -> Self {
+    fn new(model_embeddings_weights: &Tensor) -> Self {
         let decoder = Linear {
             ws: model_embeddings_weights.shallow_clone(),
             bs: None,
@@ -330,7 +338,7 @@ pub struct GPT2LMHeadModel {
 impl GPT2LMHeadModel {
     pub fn new(tensor_map: &HashMap<String, &Tensor>, config: &Config) -> Self {
         let transformer = GPT2Model::new(tensor_map, config);
-        let lm_head = GPT2LMHead::new(&transformer.wte.ws, config);
+        let lm_head = GPT2LMHead::new(&transformer.wte.ws);
 
         Self {
             transformer,
