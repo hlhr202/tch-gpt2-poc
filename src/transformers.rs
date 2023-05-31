@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::{borrow::BorrowMut, collections::HashMap};
 
 use tch::{
-    nn::{Embedding, EmbeddingConfig, Module},
+    nn::{EmbeddingConfig, Linear, Module},
     Kind, Tensor,
 };
 
@@ -58,7 +58,7 @@ impl Module for Mlp {
 }
 
 #[derive(Debug)]
-struct LayerNorm {
+pub struct LayerNorm {
     weight: Tensor,
     bias: Tensor,
     eps: f64,
@@ -98,16 +98,16 @@ impl Block {
     fn from_path(path: &str, tensor_map: &HashMap<String, &Tensor>, config: &Config) -> Self {
         let ln_1 = LayerNorm::from_path(
             &format!("{}.ln_1", path),
-            &tensor_map,
+            tensor_map,
             config.layer_norm_epsilon,
         );
-        let attn = Attention::from_path(&format!("{}.attn", path), &tensor_map, config, true);
+        let attn = Attention::from_path(&format!("{}.attn", path), tensor_map, config, true);
         let ln_2 = LayerNorm::from_path(
             &format!("{}.ln_2", path),
-            &tensor_map,
+            tensor_map,
             config.layer_norm_epsilon,
         );
-        let mlp = Mlp::from_path(&format!("{}.mlp", path), &tensor_map);
+        let mlp = Mlp::from_path(&format!("{}.mlp", path), tensor_map);
 
         Self {
             ln_1,
@@ -117,7 +117,7 @@ impl Block {
         }
     }
 
-    fn forward_t(
+    fn forward(
         &self,
         x: &Tensor,
         layer_past: Option<&Tensor>,
@@ -125,7 +125,7 @@ impl Block {
     ) -> (Tensor, Tensor) {
         let (output, present) =
             self.attn
-                .forward_t(&self.ln_1.forward(x), layer_past, attention_mask);
+                .forward(&self.ln_1.forward(x), layer_past, attention_mask);
         let x = x + output;
         let m = self.mlp.forward(&self.ln_2.forward(&x));
         let x = x + m;
@@ -134,12 +134,12 @@ impl Block {
 }
 
 #[derive(Debug)]
-pub struct MyEmbedding {
+pub struct Embedding {
     pub ws: Tensor,
     pub config: EmbeddingConfig,
 }
 
-impl Module for MyEmbedding {
+impl Module for Embedding {
     fn forward(&self, xs: &Tensor) -> Tensor {
         Tensor::embedding(
             &self.ws,
@@ -153,19 +153,22 @@ impl Module for MyEmbedding {
 
 #[derive(Debug)]
 pub struct GPT2Model {
-    wte: MyEmbedding,
-    wpe: MyEmbedding,
-    h: Vec<Block>,
-    ln_f: LayerNorm,
+    pub wte: Embedding,
+    pub wpe: Embedding,
+    pub h: Vec<Block>,
+    pub ln_f: LayerNorm,
+    pub output_past: bool,
+    pub output_hidden_states: bool,
+    // output_attentions: bool,
 }
 
 impl GPT2Model {
     fn new(tensor_map: &HashMap<String, &Tensor>, config: &Config) -> Self {
-        let wte = MyEmbedding {
+        let wte = Embedding {
             ws: tensor_map.get("wte.weight").unwrap().shallow_clone(),
             config: Default::default(),
         };
-        let wpe = MyEmbedding {
+        let wpe = Embedding {
             ws: tensor_map.get("wpe.weight").unwrap().shallow_clone(),
             config: Default::default(),
         };
@@ -174,17 +177,26 @@ impl GPT2Model {
             .collect();
         let ln_f = LayerNorm::from_path("ln_f", tensor_map, config.layer_norm_epsilon);
 
-        Self { wte, wpe, h, ln_f }
+        Self {
+            wte,
+            wpe,
+            h,
+            ln_f,
+            output_past: true,
+            output_hidden_states: false,
+            // output_attentions: false
+        }
     }
 
-    pub fn forward_t(
+    pub fn forward(
         &self,
-        input_ids: Option<&Tensor>,
+        input_ids: &Tensor,
         position_ids: Option<&Tensor>,
         token_type_ids: Option<&Tensor>,
         layer_past: Option<&Vec<Tensor>>,
-    ) {
-        let (layer_past, layer_past_length) = match layer_past {
+        attention_mask: Option<&Tensor>,
+    ) -> (Tensor, Option<Vec<Tensor>>, Option<Vec<Tensor>>) {
+        let (past, past_length) = match layer_past {
             Some(value) => {
                 assert_eq!(
                     value.len(),
@@ -205,5 +217,143 @@ impl GPT2Model {
                 (out, 0)
             }
         };
+
+        let input_shape = input_ids.size();
+        let input_seq_length = input_shape[1];
+        let input_batch_size = input_shape[0];
+
+        let position_ids = match position_ids {
+            Some(value) => value.copy(),
+            None => Tensor::arange_start(
+                past_length,
+                input_seq_length + past_length,
+                (Kind::Int64, input_ids.device()),
+            )
+            .unsqueeze(0),
+        };
+
+        let input_ids = input_ids.view((input_batch_size * input_seq_length, input_seq_length));
+
+        let position_shape = position_ids.size();
+        let position_seq_length = position_shape[1];
+        let position_batch_size = position_shape[0];
+
+        let position_ids = position_ids.view((
+            position_batch_size * position_seq_length,
+            position_seq_length,
+        ));
+
+        let inputs_embeds = self.wte.forward(&input_ids);
+        let position_embeds = self.wpe.forward(&position_ids);
+
+        let token_type_embeds = match token_type_ids {
+            Some(value) => value.apply(&self.wte),
+            None => Tensor::zeros_like(&position_embeds),
+        };
+
+        let attention_mask: Option<Tensor> = attention_mask.map(|value| {
+            let attention_mask = value
+                .view((inputs_embeds.size()[0], -1))
+                .unsqueeze(1)
+                .unsqueeze(2)
+                .to_kind(inputs_embeds.kind());
+
+            let attention_mask: Tensor = (1.0 - attention_mask) * (-10000.0);
+            attention_mask.to_kind(inputs_embeds.kind())
+        });
+
+        let mut hidden_state = inputs_embeds + position_embeds + token_type_embeds;
+
+        let mut all_presents: Option<Vec<Tensor>> =
+            if self.output_past { Some(vec![]) } else { None };
+        let mut all_hidden_states: Option<Vec<Tensor>> = if self.output_hidden_states {
+            Some(vec![])
+        } else {
+            None
+        };
+        // let mut all_attentions: Option<Vec<Tensor>> = if self.output_attentions {
+        //     Some(vec![])
+        // } else {
+        //     None
+        // };
+
+        let layer_iter = self.h.iter().zip(past);
+        for layer_values in layer_iter {
+            let (layer, past) = layer_values;
+            let temp = layer.forward(&hidden_state, past.as_ref(), attention_mask.as_ref());
+            hidden_state = temp.0;
+            if let Some(presents) = all_presents.borrow_mut() {
+                presents.push(temp.1);
+            };
+            // if let Some(attentions) = all_attentions.borrow_mut() {
+            //     attentions.push(temp.2.unwrap());
+            // };
+            if let Some(hidden_states) = all_hidden_states.borrow_mut() {
+                hidden_states.push(hidden_state.as_ref().copy());
+            };
+        }
+
+        hidden_state = self.ln_f.forward(&hidden_state);
+
+        (hidden_state, all_presents, all_hidden_states)
+    }
+}
+
+#[derive(Debug)]
+pub struct GPT2LMHead {
+    decoder: Linear,
+}
+
+impl GPT2LMHead {
+    fn new(model_embeddings_weights: &Tensor, config: &Config) -> Self {
+        let decoder = Linear {
+            ws: model_embeddings_weights.shallow_clone(),
+            bs: None,
+        };
+
+        Self { decoder }
+    }
+}
+
+impl Module for GPT2LMHead {
+    fn forward(&self, hidden_states: &Tensor) -> Tensor {
+        self.decoder.forward(hidden_states)
+    }
+}
+
+#[derive(Debug)]
+pub struct GPT2LMHeadModel {
+    pub transformer: GPT2Model,
+    pub lm_head: GPT2LMHead,
+}
+
+impl GPT2LMHeadModel {
+    pub fn new(tensor_map: &HashMap<String, &Tensor>, config: &Config) -> Self {
+        let transformer = GPT2Model::new(tensor_map, config);
+        let lm_head = GPT2LMHead::new(&transformer.wte.ws, config);
+
+        Self {
+            transformer,
+            lm_head,
+        }
+    }
+
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        position_ids: Option<&Tensor>,
+        token_type_ids: Option<&Tensor>,
+        layer_past: Option<&Vec<Tensor>>,
+        attention_mask: Option<&Tensor>,
+    ) -> (Tensor, Option<Vec<Tensor>>) {
+        let (hidden_states, presents, _) = self.transformer.forward(
+            input_ids,
+            position_ids,
+            token_type_ids,
+            layer_past,
+            attention_mask,
+        );
+        let lm_logits = self.lm_head.forward(&hidden_states);
+        (lm_logits, presents)
     }
 }

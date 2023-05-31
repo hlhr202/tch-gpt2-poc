@@ -1,0 +1,487 @@
+GPT2LMHeadModel {
+    transformer: GPT2Model {
+        wte: Embedding {
+            ws: Tensor[[50257, 768], Float],
+            config: EmbeddingConfig {
+                sparse: false,
+                scale_grad_by_freq: false,
+                ws_init: Randn {
+                    mean: 0.0,
+                    stdev: 1.0,
+                },
+                padding_idx: -1,
+            },
+        },
+        wpe: Embedding {
+            ws: Tensor[[1024, 768], Float],
+            config: EmbeddingConfig {
+                sparse: false,
+                scale_grad_by_freq: false,
+                ws_init: Randn {
+                    mean: 0.0,
+                    stdev: 1.0,
+                },
+                padding_idx: -1,
+            },
+        },
+        h: [
+            Block {
+                ln_1: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                attn: Attention {
+                    bias: Tensor[[1, 1, 1024, 1024], Float],
+                    c_attn: Conv1D {
+                        weight: Tensor[[768, 2304], Float],
+                        bias: Tensor[[2304], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[768, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    n_head: 12,
+                    n_state: 768,
+                    scale: true,
+                },
+                ln_2: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                mlp: Mlp {
+                    c_fc: Conv1D {
+                        weight: Tensor[[768, 3072], Float],
+                        bias: Tensor[[3072], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[3072, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    activation: TensorFunction,
+                },
+            },
+            Block {
+                ln_1: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                attn: Attention {
+                    bias: Tensor[[1, 1, 1024, 1024], Float],
+                    c_attn: Conv1D {
+                        weight: Tensor[[768, 2304], Float],
+                        bias: Tensor[[2304], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[768, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    n_head: 12,
+                    n_state: 768,
+                    scale: true,
+                },
+                ln_2: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                mlp: Mlp {
+                    c_fc: Conv1D {
+                        weight: Tensor[[768, 3072], Float],
+                        bias: Tensor[[3072], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[3072, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    activation: TensorFunction,
+                },
+            },
+            Block {
+                ln_1: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                attn: Attention {
+                    bias: Tensor[[1, 1, 1024, 1024], Float],
+                    c_attn: Conv1D {
+                        weight: Tensor[[768, 2304], Float],
+                        bias: Tensor[[2304], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[768, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    n_head: 12,
+                    n_state: 768,
+                    scale: true,
+                },
+                ln_2: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                mlp: Mlp {
+                    c_fc: Conv1D {
+                        weight: Tensor[[768, 3072], Float],
+                        bias: Tensor[[3072], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[3072, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    activation: TensorFunction,
+                },
+            },
+            Block {
+                ln_1: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                attn: Attention {
+                    bias: Tensor[[1, 1, 1024, 1024], Float],
+                    c_attn: Conv1D {
+                        weight: Tensor[[768, 2304], Float],
+                        bias: Tensor[[2304], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[768, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    n_head: 12,
+                    n_state: 768,
+                    scale: true,
+                },
+                ln_2: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                mlp: Mlp {
+                    c_fc: Conv1D {
+                        weight: Tensor[[768, 3072], Float],
+                        bias: Tensor[[3072], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[3072, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    activation: TensorFunction,
+                },
+            },
+            Block {
+                ln_1: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                attn: Attention {
+                    bias: Tensor[[1, 1, 1024, 1024], Float],
+                    c_attn: Conv1D {
+                        weight: Tensor[[768, 2304], Float],
+                        bias: Tensor[[2304], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[768, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    n_head: 12,
+                    n_state: 768,
+                    scale: true,
+                },
+                ln_2: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                mlp: Mlp {
+                    c_fc: Conv1D {
+                        weight: Tensor[[768, 3072], Float],
+                        bias: Tensor[[3072], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[3072, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    activation: TensorFunction,
+                },
+            },
+            Block {
+                ln_1: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                attn: Attention {
+                    bias: Tensor[[1, 1, 1024, 1024], Float],
+                    c_attn: Conv1D {
+                        weight: Tensor[[768, 2304], Float],
+                        bias: Tensor[[2304], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[768, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    n_head: 12,
+                    n_state: 768,
+                    scale: true,
+                },
+                ln_2: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                mlp: Mlp {
+                    c_fc: Conv1D {
+                        weight: Tensor[[768, 3072], Float],
+                        bias: Tensor[[3072], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[3072, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    activation: TensorFunction,
+                },
+            },
+            Block {
+                ln_1: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                attn: Attention {
+                    bias: Tensor[[1, 1, 1024, 1024], Float],
+                    c_attn: Conv1D {
+                        weight: Tensor[[768, 2304], Float],
+                        bias: Tensor[[2304], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[768, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    n_head: 12,
+                    n_state: 768,
+                    scale: true,
+                },
+                ln_2: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                mlp: Mlp {
+                    c_fc: Conv1D {
+                        weight: Tensor[[768, 3072], Float],
+                        bias: Tensor[[3072], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[3072, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    activation: TensorFunction,
+                },
+            },
+            Block {
+                ln_1: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                attn: Attention {
+                    bias: Tensor[[1, 1, 1024, 1024], Float],
+                    c_attn: Conv1D {
+                        weight: Tensor[[768, 2304], Float],
+                        bias: Tensor[[2304], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[768, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    n_head: 12,
+                    n_state: 768,
+                    scale: true,
+                },
+                ln_2: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                mlp: Mlp {
+                    c_fc: Conv1D {
+                        weight: Tensor[[768, 3072], Float],
+                        bias: Tensor[[3072], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[3072, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    activation: TensorFunction,
+                },
+            },
+            Block {
+                ln_1: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                attn: Attention {
+                    bias: Tensor[[1, 1, 1024, 1024], Float],
+                    c_attn: Conv1D {
+                        weight: Tensor[[768, 2304], Float],
+                        bias: Tensor[[2304], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[768, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    n_head: 12,
+                    n_state: 768,
+                    scale: true,
+                },
+                ln_2: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                mlp: Mlp {
+                    c_fc: Conv1D {
+                        weight: Tensor[[768, 3072], Float],
+                        bias: Tensor[[3072], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[3072, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    activation: TensorFunction,
+                },
+            },
+            Block {
+                ln_1: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                attn: Attention {
+                    bias: Tensor[[1, 1, 1024, 1024], Float],
+                    c_attn: Conv1D {
+                        weight: Tensor[[768, 2304], Float],
+                        bias: Tensor[[2304], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[768, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    n_head: 12,
+                    n_state: 768,
+                    scale: true,
+                },
+                ln_2: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                mlp: Mlp {
+                    c_fc: Conv1D {
+                        weight: Tensor[[768, 3072], Float],
+                        bias: Tensor[[3072], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[3072, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    activation: TensorFunction,
+                },
+            },
+            Block {
+                ln_1: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                attn: Attention {
+                    bias: Tensor[[1, 1, 1024, 1024], Float],
+                    c_attn: Conv1D {
+                        weight: Tensor[[768, 2304], Float],
+                        bias: Tensor[[2304], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[768, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    n_head: 12,
+                    n_state: 768,
+                    scale: true,
+                },
+                ln_2: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                mlp: Mlp {
+                    c_fc: Conv1D {
+                        weight: Tensor[[768, 3072], Float],
+                        bias: Tensor[[3072], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[3072, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    activation: TensorFunction,
+                },
+            },
+            Block {
+                ln_1: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                attn: Attention {
+                    bias: Tensor[[1, 1, 1024, 1024], Float],
+                    c_attn: Conv1D {
+                        weight: Tensor[[768, 2304], Float],
+                        bias: Tensor[[2304], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[768, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    n_head: 12,
+                    n_state: 768,
+                    scale: true,
+                },
+                ln_2: LayerNorm {
+                    weight: Tensor[[768], Float],
+                    bias: Tensor[[768], Float],
+                    eps: 1e-5,
+                },
+                mlp: Mlp {
+                    c_fc: Conv1D {
+                        weight: Tensor[[768, 3072], Float],
+                        bias: Tensor[[3072], Float],
+                    },
+                    c_proj: Conv1D {
+                        weight: Tensor[[3072, 768], Float],
+                        bias: Tensor[[768], Float],
+                    },
+                    activation: TensorFunction,
+                },
+            },
+        ],
+        ln_f: LayerNorm {
+            weight: Tensor[[768], Float],
+            bias: Tensor[[768], Float],
+            eps: 1e-5,
+        },
+        output_past: true,
+        output_hidden_states: false,
+    },
+    lm_head: GPT2LMHead {
+        decoder: Linear {
+            ws: Tensor[[50257, 768], Float],
+            bs: None,
+        },
+    },
+}

@@ -2,24 +2,22 @@ mod attention;
 mod config;
 mod transformers;
 
+use std::collections::HashMap;
+
 use config::Config;
-use std::{collections::HashMap, ops::Deref};
+
+use transformers::GPT2LMHeadModel;
 
 use anyhow::Result;
-use tch::{
-    nn::{self, Linear, Module},
-    Kind, Tensor,
-};
+use tch::Tensor;
 
-fn get_device() -> tch::Device {
+/* fn get_device() -> tch::Device {
     if tch::Cuda::is_available() {
         tch::Device::Cuda(0)
     } else {
         tch::Device::Cpu
     }
-}
-
-
+} */
 
 fn main() -> Result<()> {
     let cwd = std::env::current_dir().unwrap();
@@ -29,14 +27,22 @@ fn main() -> Result<()> {
 
     tensors.sort_by(|a, b| a.0.cmp(&b.0));
 
-    for (name, tensor) in &tensors {
-        println!("{}: {:?}", name, tensor.size());
-    }
-
     let tensor_map = tensors
         .iter()
         .map(|(name, tensor)| (name.clone(), tensor))
-        .collect::<std::collections::HashMap<String, &Tensor>>();
+        .collect::<HashMap<String, &Tensor>>();
+
+    let model = GPT2LMHeadModel::new(
+        &tensor_map,
+        &Config {
+            n_layer: 12,
+            n_embd: 768,
+            n_head: 12,
+            layer_norm_epsilon: Some(1e-5),
+        },
+    );
+
+    println!("{:#?}", model);
 
     Ok(())
 }

@@ -99,7 +99,7 @@ impl Attention {
         w.matmul(value)
     }
 
-    pub fn forward_t(
+    pub fn forward(
         &self,
         x: &Tensor,
         layer_past: Option<&Tensor>,
