@@ -1698,6 +1698,7 @@ name = "tch-transformers"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "regex",
  "tch",
  "tokenizers",
 ]
