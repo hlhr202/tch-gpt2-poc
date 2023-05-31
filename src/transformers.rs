@@ -225,7 +225,7 @@ impl GPT2Model {
                 (
                     value
                         .iter()
-                        .map(|v| Some(v.copy()))
+                        .map(|v| Some(v.shallow_clone()))
                         .collect::<Vec<Option<Tensor>>>(),
                     value[0].size()[3],
                 )
@@ -242,7 +242,7 @@ impl GPT2Model {
         // let input_batch_size = input_shape[0];
 
         let position_ids = match position_ids {
-            Some(value) => value.copy(),
+            Some(value) => value.shallow_clone(),
             None => Tensor::arange_start(
                 past_length,
                 input_seq_length + past_length,
@@ -297,7 +297,7 @@ impl GPT2Model {
             //     attentions.push(temp.2.unwrap());
             // };
             if let Some(hidden_states) = all_hidden_states.borrow_mut() {
-                hidden_states.push(hidden_state.as_ref().copy());
+                hidden_states.push(hidden_state.as_ref().shallow_clone());
             };
         }
 
