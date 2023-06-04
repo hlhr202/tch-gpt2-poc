@@ -18,3 +18,7 @@ path = "src/generate/main.rs"
 [[bin]]
 name = "quantize"
 path = "src/quantization/main.rs"
+
+[[bin]]
+name = "falcon"
+path = "src/falcon/main.rs"

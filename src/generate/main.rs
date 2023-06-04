@@ -1,6 +1,7 @@
 mod attention;
 mod config;
 mod transformers;
+mod loader;
 
 use std::{collections::HashMap, io::Write};
 
@@ -40,17 +41,22 @@ fn sample_logits(logits: &Tensor) -> i64 {
 }
 
 fn main() -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let path = cwd.join("model.safetensors");
     let device = get_device();
+    // let cwd = std::env::current_dir()?;
+    // let path = cwd.join("model.safetensors");
 
-    let mut tensors = Tensor::read_safetensors(path)?;
+    // let mut tensors = Tensor::read_safetensors(path)?;
+
+    let mut tensors = loader::load_multi()?;
 
     tensors.sort_by(|a, b| a.0.cmp(&b.0));
 
     let tensor_map = tensors
         .iter()
-        .map(|(name, tensor)| (name.clone(), tensor.to_device(device)))
+        .map(|(name, tensor)| {
+            // let tensor = tensor.dequantize();
+            (name.clone(), tensor.to_device(device))
+        })
         .collect::<HashMap<String, Tensor>>();
 
     let tokenizer = Tokenizer::from_pretrained("gpt2", None)?;

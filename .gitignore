@@ -3,3 +3,4 @@
 *.ot
 .vscode/
 tmp/
+*.bin
