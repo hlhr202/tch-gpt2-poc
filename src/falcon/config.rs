@@ -58,4 +58,7 @@ impl RWConfig {
     pub fn is_rotary(&self) -> bool {
         !self.alibi
     }
+    pub fn get_num_hidden_layers(&self) -> i64 {
+        self.n_layer
+    }
 }

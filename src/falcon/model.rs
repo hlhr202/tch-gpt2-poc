@@ -1,15 +1,69 @@
 #![allow(clippy::too_many_arguments)]
-use std::borrow::{Borrow, BorrowMut};
+use std::{
+    borrow::{Borrow, BorrowMut},
+    vec,
+};
 
 use crate::config::RWConfig;
 use tch::{
-    nn::{layer_norm, Init, LayerNorm, LayerNormConfig, LinearConfig, Module, Path},
-    Device, Kind, Tensor,
+    nn::{
+        embedding, layer_norm, EmbeddingConfig, Init, LayerNorm, LayerNormConfig, LinearConfig,
+        Module, Path,
+    },
+    Device, IndexOp, Kind, NewAxis, Tensor,
 };
 
 fn dropout_add(x: &Tensor, residual: &Tensor, p: f64, train: bool) -> Tensor {
     let out = x.dropout(p, train);
     residual + out
+}
+
+fn make_causal_mask(
+    input_ids_shape: (i64, i64),
+    device: Device,
+    past_key_values_length: i64,
+) -> Tensor {
+    let (batch_size, target_length) = input_ids_shape;
+    let mask = Tensor::zeros(
+        [target_length, target_length + past_key_values_length],
+        (Kind::Bool, device),
+    );
+
+    let seq_ids = Tensor::arange(target_length, (Kind::Int64, device));
+
+    mask.i((.., past_key_values_length..)).copy_(
+        &seq_ids
+            .i((.., NewAxis))
+            .lt_tensor(&seq_ids.i((NewAxis, ..))),
+    );
+
+    if past_key_values_length > 0 {
+        let mask_first_part = Tensor::zeros(
+            [target_length, past_key_values_length],
+            (Kind::Bool, device),
+        );
+        mask.i((.., ..past_key_values_length))
+            .copy_(&mask_first_part);
+    }
+
+    mask.i((NewAxis, NewAxis, .., ..)).expand(
+        [
+            batch_size,
+            1,
+            target_length,
+            target_length + past_key_values_length,
+        ],
+        false,
+    )
+}
+
+fn expand_mask(mask: &Tensor, tgt_length: &Option<i64>) -> Tensor {
+    let (batch_size, src_length) = mask.size2().unwrap();
+    let tgt_length = tgt_length.unwrap_or(src_length);
+
+    let expanded_mask = mask.i((.., NewAxis, NewAxis, ..)).to_kind(Kind::Bool).neg();
+
+    expanded_mask.expand([batch_size, 1, tgt_length, tgt_length], false)
 }
 
 #[derive(Debug)]
@@ -429,7 +483,7 @@ impl DecoderLayer {
             vec![hidden_size],
             layer_norm_config,
         );
-        let num_heads = config.n_head;
+        // let num_heads = config.n_head;
         let self_attention = Attention::new(&(path / "self_attention"), config);
 
         let post_attention_layernorm = if !config.parallel_attn {
@@ -444,10 +498,8 @@ impl DecoderLayer {
 
         let mlp = MLP::new(&(path / "mlp"), config);
 
-        let apply_residual_connection_post_layernorm =
-            config.apply_residual_connection_post_layernorm;
-
-        let hidden_dropout = config.hidden_dropout;
+        // let apply_residual_connection_post_layernorm =
+        //     config.apply_residual_connection_post_layernorm;
 
         Self {
             input_layernorm,
@@ -468,7 +520,7 @@ impl DecoderLayer {
         head_mask: &Option<Tensor>,
         use_cache: bool,
         output_attentions: bool,
-    ) {
+    ) -> (Tensor, Option<(Tensor, Tensor)>) {
         let mut layernorm_output = self.input_layernorm.forward(hidden_states);
         let mut residual = hidden_states.shallow_clone();
 
@@ -482,6 +534,7 @@ impl DecoderLayer {
             output_attentions,
         );
 
+        // attn output
         let attention_output = attn_outputs.0;
 
         if !self.config.parallel_attn {
@@ -499,7 +552,8 @@ impl DecoderLayer {
                 .forward(&residual);
         }
 
-        let mut outputs = attn_outputs.1;
+        // key value output
+        let outputs = attn_outputs.1;
 
         let mut mlp_output = self.mlp.forward(&layernorm_output);
 
@@ -514,19 +568,187 @@ impl DecoderLayer {
             self.training,
         );
 
-        // TODO: impl output
+        if use_cache {
+            (output, outputs)
+        } else {
+            (output, None::<(Tensor, Tensor)>)
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct RWModel {
+    config: RWConfig,
+    h: Vec<DecoderLayer>,
+}
+
+impl RWModel {
+    pub fn new(path: &Path, config: &RWConfig, training: bool) -> Self {
+        let embed_dim = config.hidden_size;
+        let num_heads = config.n_head;
+        let alibi = config.alibi;
+
+        let word_embeddings = embedding(
+            path / "word_embeddings", // TODO: check if this is correct
+            config.vocab_size,
+            embed_dim,
+            EmbeddingConfig::default(),
+        );
+
+        let mut h = Vec::<DecoderLayer>::with_capacity(config.get_num_hidden_layers() as usize);
+
+        for i in 0..config.get_num_hidden_layers() {
+            h.push(DecoderLayer::new(
+                &(path / format!("decoder.layers.{}", i)), // TODO: check if this is correct
+                config,
+                training,
+            ));
+        }
+
+        let ln_f = layer_norm(
+            path / "ln_f",
+            vec![embed_dim],
+            LayerNormConfig {
+                eps: config.layer_norm_epsilon,
+                ..Default::default()
+            },
+        );
+        Self {
+            config: config.clone(),
+            h,
+        }
+    }
+
+    fn prepare_attn_mask(
+        &self,
+        attention_mask: &Tensor,
+        input_shape: (i64, i64),
+        past_key_values_length: i64,
+    ) -> Tensor {
+        let device = attention_mask.device();
+        let (_, src_length) = input_shape;
+        let combined_attention_mask = if src_length > 1 {
+            Some(make_causal_mask(
+                input_shape,
+                device,
+                past_key_values_length,
+            ))
+        } else {
+            None
+        };
+        let expanded_attn_mask = expand_mask(attention_mask, &Some(src_length));
+
+        combined_attention_mask
+            .map(|combined_attention_mask| {
+                expanded_attn_mask.bitwise_or_tensor(&combined_attention_mask)
+            })
+            .unwrap_or(expanded_attn_mask)
+    }
+
+    fn convert_head_mask_to_5d(&self, head_mask: &Tensor, num_hidden_layers: i64) -> Tensor {
+        let head_mask = {
+            if head_mask.dim() == 1 {
+                let head_mask = head_mask
+                    .unsqueeze(0)
+                    .unsqueeze(0)
+                    .unsqueeze(-1)
+                    .unsqueeze(-1);
+                head_mask.expand([num_hidden_layers, -1, -1, -1, -1], false)
+            } else if head_mask.dim() == 2 {
+                head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)
+            } else {
+                head_mask.shallow_clone()
+            }
+        };
+
+        assert!(
+            head_mask.dim() == 5,
+            "head_mask.dim() should be 5, but is {}",
+            head_mask.dim()
+        );
+
+        head_mask.to_kind(Kind::Float)
+    }
+
+    fn get_head_mask(
+        &self,
+        head_mask: &Option<Tensor>,
+        num_hidden_layers: i64,
+        is_attention_chunked: bool,
+    ) -> Tensor {
+        if !head_mask.is_none() {
+            let mut head_mask =
+                self.convert_head_mask_to_5d(head_mask.as_ref().unwrap(), num_hidden_layers);
+
+            if is_attention_chunked {
+                head_mask = head_mask.unsqueeze(-1);
+            }
+            head_mask
+        } else {
+            Tensor::from_slice(&vec![0; num_hidden_layers as usize])
+        }
+    }
+
+    fn forward(
+        &self,
+        input_ids: &Option<Tensor>,
+        past_key_values: &Option<Vec<(Tensor, Tensor)>>,
+        attention_mask: &Option<Tensor>,
+        head_mask: &Option<Tensor>,
+        inputs_embds: &Option<Tensor>,
+        use_cache: Option<bool>,
+        output_attentions: Option<bool>,
+        output_hidden_states: Option<bool>,
+        return_dict: Option<bool>,
+    ) {
+        let output_attentions = output_attentions.unwrap_or(false);
+        let output_hidden_states = output_hidden_states.unwrap_or(false);
+        let use_cache = use_cache.unwrap_or(self.config.use_cache);
+        let return_dict = return_dict.unwrap_or(false);
+
+        if input_ids.is_some() && inputs_embds.is_some() {
+            panic!("Only one of input_ids or inputs_embeds may be set");
+        }
+
+        let (batch_size, seq_length) = if let Some(input_ids) = input_ids {
+            input_ids.size2().unwrap()
+        } else if let Some(inputs_embds) = inputs_embds {
+            inputs_embds.size2().unwrap()
+        } else {
+            panic!("You have to specify either input_ids or inputs_embeds");
+        };
+
+        let past_key_values = past_key_values
+            .as_ref()
+            .unwrap_or(&Vec::with_capacity(self.h.len()));
     }
 }
 
 #[test]
-fn test() {
-    let qkv = Tensor::randn([2, 3, 4], (Kind::Float, Device::Cpu));
+fn test_i() {
+    use tch::TensorIndexer;
 
-    qkv.print();
+    let unbounded: TensorIndexer = (..).into();
 
-    println!("-------------------");
+    println!("{:?}", unbounded);
 
-    let q = qkv.index_select(-2, &Tensor::from_slice(&[0]));
+    let bounded: TensorIndexer = (0..10).into();
 
-    q.print();
+    println!("{:?}", bounded);
+
+    let half_bounded: TensorIndexer = (..10).into();
+
+    println!("{:?}", half_bounded);
+
+    let tensor_selector: TensorIndexer = (&Tensor::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9])).into();
+
+    println!("{:?}", tensor_selector);
+
+    let num_selector: TensorIndexer = 10.into();
+
+    println!("{:?}", num_selector);
+
+    let new_axis_selector: TensorIndexer = NewAxis.into();
+
+    println!("{:?}", new_axis_selector);
 }
