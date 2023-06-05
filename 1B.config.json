@@ -1,0 +1,26 @@
+{
+    "alibi": true,
+    "apply_residual_connection_post_layernorm": false,
+    "architectures": ["RWForCausalLM"],
+    "attention_dropout": 0.0,
+    "auto_map": {
+        "AutoConfig": "configuration_RW.RWConfig",
+        "AutoModelForCausalLM": "modelling_RW.RWForCausalLM"
+    },
+    "bias": true,
+    "bos_token_id": 1,
+    "eos_token_id": 2,
+    "hidden_dropout": 0.0,
+    "hidden_size": 2048,
+    "initializer_range": 0.02,
+    "layer_norm_epsilon": 1e-5,
+    "model_type": "RefinedWebModel",
+    "multi_query": false,
+    "n_head": 32,
+    "n_layer": 24,
+    "parallel_attn": false,
+    "torch_dtype": "bfloat16",
+    "transformers_version": "4.27.4",
+    "use_cache": true,
+    "vocab_size": 50304
+}

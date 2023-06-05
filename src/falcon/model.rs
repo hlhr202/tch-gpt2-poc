@@ -7,8 +7,8 @@ use std::{
 use crate::config::RWConfig;
 use tch::{
     nn::{
-        embedding, layer_norm, EmbeddingConfig, Init, LayerNorm, LayerNormConfig, LinearConfig,
-        Module, Path,
+        self, embedding, layer_norm, Embedding, EmbeddingConfig, Init, LayerNorm, LayerNormConfig,
+        LinearConfig, Module, Path,
     },
     Device, IndexOp, Kind, NewAxis, Tensor,
 };
@@ -66,6 +66,49 @@ fn expand_mask(mask: &Tensor, tgt_length: &Option<i64>) -> Tensor {
     expanded_mask.expand([batch_size, 1, tgt_length, tgt_length], false)
 }
 
+fn build_abili_tensor(attention_mask: &Tensor, num_heads: i64, dtype: Kind) -> Tensor {
+    let (batch_size, seq_length) = attention_mask.size2().unwrap();
+
+    let closest_power_of_2 = 2_i64.pow((num_heads as f64).log2().floor() as u32);
+
+    let base = Tensor::from_slice(&[
+        2_f64.powf(-(2_f64.powf(-((closest_power_of_2 as f64).log2() - 3_f64))))
+    ])
+    .to_kind(Kind::Float)
+    .to_device(attention_mask.device());
+
+    let power = Tensor::arange_start(
+        1,
+        1 + closest_power_of_2,
+        (Kind::Int, attention_mask.device()),
+    );
+
+    let mut slopes = base.pow(&power);
+
+    if closest_power_of_2 != num_heads {
+        let extra_base = Tensor::from_slice(&[
+            2_f64.powf(-(2_f64.powf(-(((2 * closest_power_of_2) as f64).log2() - 3_f64))))
+        ])
+        .to_kind(Kind::Float)
+        .to_device(attention_mask.device());
+
+        let num_remaining_heads = closest_power_of_2.min(num_heads - closest_power_of_2);
+        let extra_powers = Tensor::arange_start_step(
+            1,
+            1 + 2 * num_remaining_heads,
+            2,
+            (Kind::Int, attention_mask.device()),
+        );
+        slopes = Tensor::cat(&[slopes, extra_base.pow(&extra_powers)], 0);
+    }
+
+    let arange_tensor = ((attention_mask.cumsum(-1, attention_mask.kind()) - 1) * attention_mask)
+        .i((.., NewAxis, ..));
+    let alibi = slopes.unsqueeze(-1).to_kind(Kind::BFloat16) * arange_tensor;
+    alibi
+        .reshape([batch_size * num_heads, 1, seq_length])
+        .to_kind(dtype)
+}
 #[derive(Debug)]
 pub struct Dropout {
     pub p: f64,
@@ -568,6 +611,7 @@ impl DecoderLayer {
             self.training,
         );
 
+        // hidden_states, (present, attentions)
         if use_cache {
             (output, outputs)
         } else {
@@ -578,15 +622,26 @@ impl DecoderLayer {
 
 #[derive(Debug)]
 pub struct RWModel {
+    num_heads: i64,
     config: RWConfig,
     h: Vec<DecoderLayer>,
+    word_embeddings: Embedding,
+    ln_f: LayerNorm,
+}
+
+#[derive(Debug)]
+pub struct BaseModelOutputWithPastAndCrossAttentions {
+    pub last_hidden_state: Tensor,
+    pub past_key_values: Option<Vec<(Tensor, Tensor)>>,
+    pub hidden_states: Option<Vec<Tensor>>,
+    pub attentions: Option<Vec<(Tensor, Tensor)>>,
 }
 
 impl RWModel {
     pub fn new(path: &Path, config: &RWConfig, training: bool) -> Self {
         let embed_dim = config.hidden_size;
         let num_heads = config.n_head;
-        let alibi = config.alibi;
+        // let alibi = config.alibi;
 
         let word_embeddings = embedding(
             path / "word_embeddings", // TODO: check if this is correct
@@ -599,7 +654,7 @@ impl RWModel {
 
         for i in 0..config.get_num_hidden_layers() {
             h.push(DecoderLayer::new(
-                &(path / format!("decoder.layers.{}", i)), // TODO: check if this is correct
+                &(path / "decode" / "layers" / i), // TODO: check if this is correct
                 config,
                 training,
             ));
@@ -614,8 +669,11 @@ impl RWModel {
             },
         );
         Self {
+            num_heads,
             config: config.clone(),
             h,
+            word_embeddings,
+            ln_f,
         }
     }
 
@@ -690,65 +748,232 @@ impl RWModel {
     }
 
     fn forward(
-        &self,
+        &mut self,
         input_ids: &Option<Tensor>,
         past_key_values: &Option<Vec<(Tensor, Tensor)>>,
         attention_mask: &Option<Tensor>,
         head_mask: &Option<Tensor>,
-        inputs_embds: &Option<Tensor>,
+        inputs_embeds: &Option<Tensor>,
         use_cache: Option<bool>,
         output_attentions: Option<bool>,
         output_hidden_states: Option<bool>,
-        return_dict: Option<bool>,
-    ) {
+        // return_dict: Option<bool>,
+    ) -> BaseModelOutputWithPastAndCrossAttentions {
         let output_attentions = output_attentions.unwrap_or(false);
         let output_hidden_states = output_hidden_states.unwrap_or(false);
         let use_cache = use_cache.unwrap_or(self.config.use_cache);
-        let return_dict = return_dict.unwrap_or(false);
+        // let return_dict = return_dict.unwrap_or(false);
 
-        if input_ids.is_some() && inputs_embds.is_some() {
+        if input_ids.is_some() && inputs_embeds.is_some() {
             panic!("Only one of input_ids or inputs_embeds may be set");
         }
 
         let (batch_size, seq_length) = if let Some(input_ids) = input_ids {
             input_ids.size2().unwrap()
-        } else if let Some(inputs_embds) = inputs_embds {
+        } else if let Some(inputs_embds) = inputs_embeds {
             inputs_embds.size2().unwrap()
         } else {
             panic!("You have to specify either input_ids or inputs_embeds");
         };
 
-        let past_key_values = past_key_values
+        // let past_key_values = past_key_values
+        //     .as_ref()
+        //     .unwrap_or(&Vec::with_capacity(self.h.len()));
+
+        let head_mask = self.get_head_mask(head_mask, self.config.n_layer, false);
+
+        let inputs_embeds = if inputs_embeds.is_none() {
+            self.word_embeddings.forward(input_ids.as_ref().unwrap())
+        } else {
+            inputs_embeds.as_ref().unwrap().shallow_clone()
+        };
+
+        let mut hidden_states = inputs_embeds;
+
+        let mut presents = if use_cache {
+            Some(Vec::<(Tensor, Tensor)>::new())
+        } else {
+            None
+        };
+
+        let mut all_self_attentions = if output_attentions {
+            Some(Vec::<(Tensor, Tensor)>::new())
+        } else {
+            None
+        };
+
+        let mut all_hidden_states = if output_hidden_states {
+            Some(Vec::<Tensor>::new())
+        } else {
+            None
+        };
+
+        let mut seq_length_with_past = seq_length;
+        let mut past_key_values_length = 0;
+
+        if past_key_values.is_some() {
+            past_key_values_length = past_key_values.as_ref().unwrap()[0].0.size()[2];
+            seq_length_with_past += past_key_values_length;
+        }
+
+        let attention_mask = attention_mask
             .as_ref()
-            .unwrap_or(&Vec::with_capacity(self.h.len()));
+            .unwrap_or(&Tensor::ones(
+                [batch_size, seq_length_with_past],
+                (Kind::Int64, hidden_states.device()),
+            ))
+            .to(hidden_states.device());
+
+        let abili = if self.config.alibi {
+            Some(build_abili_tensor(
+                &attention_mask,
+                self.num_heads,
+                hidden_states.kind(),
+            ))
+        } else {
+            None
+        };
+
+        let causal_mask = self.prepare_attn_mask(
+            &attention_mask,
+            (batch_size, seq_length),
+            past_key_values_length,
+        );
+
+        for i in 0..self.h.len() {
+            let block = &mut self.h[i];
+            let layer_past = past_key_values.as_ref().map(|past_key_values| {
+                (
+                    past_key_values[i].0.shallow_clone(),
+                    past_key_values[i].1.shallow_clone(),
+                )
+            });
+
+            if output_hidden_states {
+                all_hidden_states
+                    .as_mut()
+                    .unwrap()
+                    .push(hidden_states.shallow_clone());
+            }
+
+            // TODO: impl gradient_checkpointing & training
+
+            let outputs = block.forward(
+                &hidden_states,
+                &abili,
+                &causal_mask,
+                &layer_past,
+                &head_mask.f_get(i as i64).ok(),
+                use_cache,
+                output_attentions,
+            );
+
+            hidden_states = outputs.0;
+
+            if use_cache {
+                presents.as_mut().unwrap().push(
+                    outputs
+                        .1
+                        .as_ref()
+                        .map(|(t1, t2)| (t1.shallow_clone(), t2.shallow_clone()))
+                        .unwrap(),
+                );
+            }
+
+            // TODO: check if this is correct
+            if output_attentions {
+                all_self_attentions
+                    .as_mut()
+                    .unwrap()
+                    .push(outputs.1.unwrap());
+            }
+        }
+
+        hidden_states = self.ln_f.forward(&hidden_states);
+
+        if output_hidden_states {
+            all_hidden_states
+                .as_mut()
+                .unwrap()
+                .push(hidden_states.shallow_clone());
+        }
+
+        BaseModelOutputWithPastAndCrossAttentions {
+            last_hidden_state: hidden_states,
+            past_key_values: presents,
+            attentions: all_self_attentions,
+            hidden_states: all_hidden_states,
+        }
     }
 }
 
-#[test]
-fn test_i() {
-    use tch::TensorIndexer;
+#[derive(Debug)]
+pub struct RWForCausalLM {
+    transformer: RWModel,
+    lm_head: nn::Linear,
+}
 
-    let unbounded: TensorIndexer = (..).into();
+#[derive(Debug)]
+pub struct CausalLMOutputWithCrossAttentions {
+    pub logits: Tensor,
+    pub past_key_values: Option<Vec<(Tensor, Tensor)>>,
+    pub hidden_states: Option<Vec<Tensor>>,
+    pub attentions: Option<Vec<(Tensor, Tensor)>>,
+}
 
-    println!("{:?}", unbounded);
+impl RWForCausalLM {
+    pub fn new(p: &nn::Path, config: &RWConfig, training: bool) -> RWForCausalLM {
+        let transformer = RWModel::new(p, config, training);
+        let lm_head = nn::linear(
+            p / "lm_head", // TODO: check if this is correct
+            config.hidden_size,
+            config.vocab_size,
+            LinearConfig {
+                bias: config.bias,
+                ..Default::default()
+            },
+        );
 
-    let bounded: TensorIndexer = (0..10).into();
+        RWForCausalLM {
+            transformer,
+            lm_head,
+        }
+    }
 
-    println!("{:?}", bounded);
+    pub fn forward(
+        &mut self,
+        input_ids: &Option<Tensor>,
+        past_key_values: &Option<Vec<(Tensor, Tensor)>>,
+        attention_mask: &Option<Tensor>,
+        head_mask: &Option<Tensor>,
+        inputs_embeds: &Option<Tensor>,
+        use_cache: Option<bool>,
+        output_attentions: Option<bool>,
+        output_hidden_states: Option<bool>,
+        // return_dict: Option<bool>,
+    ) -> CausalLMOutputWithCrossAttentions {
+        let transformer_outputs = self.transformer.forward(
+            input_ids,
+            past_key_values,
+            attention_mask,
+            head_mask,
+            inputs_embeds,
+            use_cache,
+            output_attentions,
+            output_hidden_states,
+            // return_dict,
+        );
 
-    let half_bounded: TensorIndexer = (..10).into();
+        let hidden_states = transformer_outputs.last_hidden_state;
+        let lm_logits = self.lm_head.forward(&hidden_states);
 
-    println!("{:?}", half_bounded);
+        // TODO: impl labels
 
-    let tensor_selector: TensorIndexer = (&Tensor::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9])).into();
-
-    println!("{:?}", tensor_selector);
-
-    let num_selector: TensorIndexer = 10.into();
-
-    println!("{:?}", num_selector);
-
-    let new_axis_selector: TensorIndexer = NewAxis.into();
-
-    println!("{:?}", new_axis_selector);
+        CausalLMOutputWithCrossAttentions {
+            logits: lm_logits,
+            past_key_values: transformer_outputs.past_key_values,
+            hidden_states: transformer_outputs.hidden_states,
+            attentions: transformer_outputs.attentions,
+        }
+    }
 }

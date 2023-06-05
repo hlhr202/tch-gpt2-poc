@@ -1,6 +1,7 @@
+use serde::{Deserialize, Serialize};
 use tch::Device;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RWConfig {
     // default: 250880
     pub vocab_size: i64,
