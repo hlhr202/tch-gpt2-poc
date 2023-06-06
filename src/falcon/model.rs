@@ -644,7 +644,7 @@ impl RWModel {
         // let alibi = config.alibi;
 
         let word_embeddings = embedding(
-            path / "word_embeddings", // TODO: check if this is correct
+            path / "word_embeddings",
             config.vocab_size,
             embed_dim,
             EmbeddingConfig::default(),
@@ -654,7 +654,7 @@ impl RWModel {
 
         for i in 0..config.get_num_hidden_layers() {
             h.push(DecoderLayer::new(
-                &(path / "decode" / "layers" / i), // TODO: check if this is correct
+                &(path / "h" / i),
                 config,
                 training,
             ));
@@ -923,13 +923,13 @@ pub struct CausalLMOutputWithCrossAttentions {
 
 impl RWForCausalLM {
     pub fn new(p: &nn::Path, config: &RWConfig, training: bool) -> RWForCausalLM {
-        let transformer = RWModel::new(p, config, training);
+        let transformer = RWModel::new(&(p / "transformer"), config, training);
         let lm_head = nn::linear(
-            p / "lm_head", // TODO: check if this is correct
+            p / "lm_head",
             config.hidden_size,
             config.vocab_size,
             LinearConfig {
-                bias: config.bias,
+                bias: false,
                 ..Default::default()
             },
         );

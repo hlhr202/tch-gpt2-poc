@@ -24,3 +24,7 @@ path = "src/quantization/main.rs"
 [[bin]]
 name = "falcon"
 path = "src/falcon/main.rs"
+
+[[bin]]
+name = "falcon-keys"
+path = "src/falcon/loader.rs"
