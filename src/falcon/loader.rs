@@ -5,7 +5,7 @@ pub fn load_multiz() -> Result<Vec<(String, Tensor)>> {
     let cwd = std::env::current_dir()?;
     let path = cwd.join("pytorch_model.bin");
 
-    let tensors = Tensor::loadz_multi_with_device(path, tch::Device::Cpu)?;
+    let tensors = Tensor::loadz_multi_with_device(path, tch::Device::Mps)?;
 
     Ok(tensors)
 }

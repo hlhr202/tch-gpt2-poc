@@ -61,7 +61,7 @@ fn expand_mask(mask: &Tensor, tgt_length: &Option<i64>) -> Tensor {
     let (batch_size, src_length) = mask.size2().unwrap();
     let tgt_length = tgt_length.unwrap_or(src_length);
 
-    let expanded_mask = mask.i((.., NewAxis, NewAxis, ..)).to_kind(Kind::Bool).neg();
+    let expanded_mask = mask.i((.., NewAxis, NewAxis, ..)).to_kind(Kind::Bool).logical_not();
 
     expanded_mask.expand([batch_size, 1, tgt_length, tgt_length], false)
 }
@@ -163,7 +163,7 @@ pub fn linear<'a, T: Borrow<Path<'a>>>(
 impl Module for Linear {
     fn forward(&self, input: &Tensor) -> Tensor {
         // transposed
-        let ret = input.mm(&self.ws.t_copy());
+        let ret = input.matmul(&self.ws.t_copy());
         if let Some(bias) = &self.bs {
             ret + bias
         } else {
@@ -175,8 +175,8 @@ impl Module for Linear {
 #[derive(Debug)]
 pub struct RoteryEmbedding {
     inv_freq: Tensor,
-    head_dim: i64,
-    batch_size_cache: Option<i64>,
+    // head_dim: i64,
+    // batch_size_cache: Option<i64>,
     cos_cached: Option<Tensor>,
     sin_cached: Option<Tensor>,
 }
@@ -194,8 +194,8 @@ impl RoteryEmbedding {
 
         RoteryEmbedding {
             inv_freq,
-            head_dim,
-            batch_size_cache: None,
+            // head_dim,
+            // batch_size_cache: None,
             cos_cached: None,
             sin_cached: None,
         }
@@ -253,7 +253,7 @@ impl RoteryEmbedding {
 
 #[derive(Debug)]
 struct Attention {
-    hidden_size: i64,
+    // hidden_size: i64,
     num_heads: i64,
     head_dim: i64,
     multi_query: bool,
@@ -317,7 +317,7 @@ impl Attention {
         };
 
         Attention {
-            hidden_size,
+            // hidden_size,
             num_heads,
             head_dim,
             multi_query: config.multi_query,
@@ -464,13 +464,13 @@ impl Attention {
 }
 
 #[derive(Debug)]
-pub struct MLP {
+pub struct Mlp {
     dense_h_to_4h: Linear,
     dense_4h_to_h: Linear,
     // hidden_dropout: Dropout,
 }
 
-impl MLP {
+impl Mlp {
     fn new(path: &Path, config: &RWConfig) -> Self {
         let hidden_size = config.hidden_size;
         let linear_config = LinearConfig {
@@ -496,7 +496,7 @@ impl MLP {
     }
 }
 
-impl Module for MLP {
+impl Module for Mlp {
     fn forward(&self, x: &Tensor) -> Tensor {
         let x = self.dense_h_to_4h.forward(x);
         let x = x.gelu("none");
@@ -511,7 +511,7 @@ struct DecoderLayer {
     config: RWConfig,
     training: bool,
     post_attention_layernorm: Option<LayerNorm>,
-    mlp: MLP,
+    mlp: Mlp,
 }
 
 impl DecoderLayer {
@@ -539,7 +539,7 @@ impl DecoderLayer {
             None
         };
 
-        let mlp = MLP::new(&(path / "mlp"), config);
+        let mlp = Mlp::new(&(path / "mlp"), config);
 
         // let apply_residual_connection_post_layernorm =
         //     config.apply_residual_connection_post_layernorm;
