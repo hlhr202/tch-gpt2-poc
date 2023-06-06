@@ -14,8 +14,8 @@ tch = "0.13.0"
 tokenizers = { version = "0.13.3", features = ["http"] }
 
 [[bin]]
-name = "generate"
-path = "src/generate/main.rs"
+name = "gpt2"
+path = "src/gpt2/main.rs"
 
 [[bin]]
 name = "quantize"
@@ -24,7 +24,3 @@ path = "src/quantization/main.rs"
 [[bin]]
 name = "falcon"
 path = "src/falcon/main.rs"
-
-[[bin]]
-name = "falcon-keys"
-path = "src/falcon/loader.rs"

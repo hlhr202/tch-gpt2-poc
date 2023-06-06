@@ -1,12 +1,12 @@
 mod config;
-mod loader;
+pub mod device;
 mod model;
-mod device;
 
 use std::io::Write;
 
 use anyhow::Result;
-use tch::Tensor;
+use device::get_device;
+use tch::{Kind, Tensor};
 use tokenizers::Tokenizer;
 
 fn top_k_logits(logits: &Tensor, k: i64) -> Tensor {
@@ -17,7 +17,7 @@ fn top_k_logits(logits: &Tensor, k: i64) -> Tensor {
     let min_values = values.get(-1);
     logits.where_self(
         &logits.lt_tensor(&min_values),
-        &(Tensor::ones_like(logits) * f64::NEG_INFINITY).to_device(tch::Device::Mps),
+        &(Tensor::ones_like(logits) * f64::NEG_INFINITY).to_device(get_device()),
     )
 }
 
@@ -36,7 +36,7 @@ fn main() -> Result<(), anyhow::Error> {
     let tokenizer =
         Tokenizer::from_pretrained("tiiuae/falcon-rw-1b", None).map_err(|e| anyhow::anyhow!(e))?;
 
-    let mut vs = tch::nn::VarStore::new(tch::Device::Mps);
+    let mut vs = tch::nn::VarStore::new(get_device());
 
     let file = std::fs::File::open(config_path)?;
 
@@ -44,17 +44,17 @@ fn main() -> Result<(), anyhow::Error> {
 
     let mut causal_lm = model::RWForCausalLM::new(&vs.root(), &config, false);
 
-    let prompt = "Hello, my name is";
+    vs.set_kind(Kind::Half);
+
+    vs.load(path)?;
+
+    let prompt = " Girafatron is obsessed with giraffes, the most glorious animal on the face of this Earth. Giraftron believes all other animals are irrelevant when compared to the glorious majesty of the giraffe.\nDaniel: Hello, Girafatron!\nGirafatron:";
 
     let n_ctx = 256;
 
     let input = tokenizer
         .encode(prompt, false)
         .map_err(|e| anyhow::anyhow!(e))?;
-
-    // println!("{:#?}", input);
-
-    vs.load(path)?;
 
     let mut input_ids = input
         .get_ids()
@@ -71,7 +71,7 @@ fn main() -> Result<(), anyhow::Error> {
         let input_slice = &input_ids[0..cursor];
         let batch_input = Tensor::from_slice(input_slice)
             .reshape([1, -1])
-            .to_device(tch::Device::Mps);
+            .to_device(get_device());
 
         let output = causal_lm.forward(
             &Some(batch_input),
@@ -84,9 +84,17 @@ fn main() -> Result<(), anyhow::Error> {
             Some(false),
         );
 
+        // let logits = output.logits.select(1, -1).squeeze();
+        // let logits = logits.softmax(-1, logits.kind());
+        // let (_v, idx) = logits.topk(40, -1, true, false);
+        // let token = i64::try_from(&idx.get(0)).unwrap();
+
         let logits = output.logits.select(1, -1).squeeze();
         let token = sample_logits(&logits);
-        // let token = i64::try_from(probs).unwrap();
+
+        if token == 0 || token >= 50256 {
+            break;
+        }
 
         input_ids[cursor] = token;
 

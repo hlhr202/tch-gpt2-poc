@@ -4,7 +4,7 @@ use std::{
     vec,
 };
 
-use crate::config::RWConfig;
+use crate::{config::RWConfig, device::get_device};
 use tch::{
     nn::{
         self, embedding, layer_norm, Embedding, EmbeddingConfig, Init, LayerNorm, LayerNormConfig,
@@ -61,7 +61,10 @@ fn expand_mask(mask: &Tensor, tgt_length: &Option<i64>) -> Tensor {
     let (batch_size, src_length) = mask.size2().unwrap();
     let tgt_length = tgt_length.unwrap_or(src_length);
 
-    let expanded_mask = mask.i((.., NewAxis, NewAxis, ..)).to_kind(Kind::Bool).logical_not();
+    let expanded_mask = mask
+        .i((.., NewAxis, NewAxis, ..))
+        .to_kind(Kind::Bool)
+        .logical_not();
 
     expanded_mask.expand([batch_size, 1, tgt_length, tgt_length], false)
 }
@@ -177,6 +180,7 @@ pub struct RoteryEmbedding {
     inv_freq: Tensor,
     // head_dim: i64,
     // batch_size_cache: Option<i64>,
+    seq_len_cached: i64,
     cos_cached: Option<Tensor>,
     sin_cached: Option<Tensor>,
 }
@@ -188,7 +192,7 @@ impl RoteryEmbedding {
         let steps =
             Tensor::arange_start_step(0, head_dim, 2, (Kind::Float, device)) / head_dim as f64;
 
-        let base = Tensor::from_slice(&vec![base; steps.size()[0] as usize]);
+        let base = Tensor::from_slice(&vec![base; steps.size()[0] as usize]).to_device(device);
 
         let inv_freq = 1.0 / base.pow(&steps);
 
@@ -196,6 +200,7 @@ impl RoteryEmbedding {
             inv_freq,
             // head_dim,
             // batch_size_cache: None,
+            seq_len_cached: -1,
             cos_cached: None,
             sin_cached: None,
         }
@@ -217,20 +222,19 @@ impl RoteryEmbedding {
     }
 
     fn cos_sin(&mut self, seq_len: i64, device: Device, dtype: Kind) -> (Tensor, Tensor) {
-        if self.cos_cached.is_none() || self.sin_cached.is_none() {
-            let t = Tensor::arange(seq_len, (Kind::Float, device));
+        if seq_len != self.seq_len_cached {
+            self.seq_len_cached = seq_len;
+            let t = Tensor::arange(seq_len, (self.inv_freq.kind(), device));
             // einsum("i,j->ij", t, self.inv_freq)
-            let freqs = t.unsqueeze(1) * self.inv_freq.unsqueeze(0);
+            let freqs = Tensor::einsum(
+                "i,j -> ij",
+                &[t, self.inv_freq.shallow_clone()],
+                None::<i64>,
+            );
             let emb = Tensor::cat(&[freqs.shallow_clone(), freqs], -1).to_kind(dtype);
 
-            let cos_cached = emb
-                .cos()
-                .view((1, -1, *emb.size().last().unwrap()))
-                .to_kind(dtype);
-            let sin_cached = emb
-                .sin()
-                .view((1, -1, *emb.size().last().unwrap()))
-                .to_kind(dtype);
+            let cos_cached = emb.cos().i((NewAxis, .., ..));
+            let sin_cached = emb.sin().i((NewAxis, .., ..));
             self.cos_cached = Some(cos_cached);
             self.sin_cached = Some(sin_cached);
         }
@@ -245,8 +249,8 @@ impl RoteryEmbedding {
         let seq_len = q.size()[1];
         let (cos, sin) = self.cos_sin(seq_len, q.device(), Kind::BFloat16);
         (
-            q * &cos + RoteryEmbedding::rotate_half(q) * &sin,
-            k * &cos + RoteryEmbedding::rotate_half(k) * &sin,
+            (q * &cos) + (RoteryEmbedding::rotate_half(q) * &sin),
+            (k * &cos) + (RoteryEmbedding::rotate_half(k) * &sin),
         )
     }
 }
@@ -338,16 +342,24 @@ impl Attention {
         if !self.multi_query {
             let fused_qkv =
                 fused_qkv.view([batch_size, seq_length, self.num_heads, 3, self.head_dim]);
-            let fused_q = fused_qkv.index_select(-2, &Tensor::from_slice(&[0]));
-            let fused_k = fused_qkv.index_select(-2, &Tensor::from_slice(&[1]));
-            let fused_v = fused_qkv.index_select(-2, &Tensor::from_slice(&[2]));
+            let fused_q =
+                fused_qkv.index_select(-2, &Tensor::from_slice(&[0]).to_device(fused_qkv.device()));
+            let fused_k =
+                fused_qkv.index_select(-2, &Tensor::from_slice(&[1]).to_device(fused_qkv.device()));
+            let fused_v =
+                fused_qkv.index_select(-2, &Tensor::from_slice(&[2]).to_device(fused_qkv.device()));
             (fused_q, fused_k, fused_v)
         } else {
             let fused_qkv =
                 fused_qkv.view([batch_size, seq_length, self.num_heads + 2, self.head_dim]);
-            let fused_q = fused_qkv.narrow(-2, 0, self.num_heads);
-            let fused_k = fused_qkv.narrow(-2, self.num_heads, 1);
-            let fused_v = fused_qkv.index_select(-2, &Tensor::from_slice(&[-1]));
+            let fused_q = fused_qkv
+                .narrow(-2, 0, self.num_heads)
+                .to_device(fused_qkv.device());
+            let fused_k = fused_qkv
+                .narrow(-2, self.num_heads, 1)
+                .to_device(fused_qkv.device());
+            let fused_v = fused_qkv
+                .index_select(-2, &Tensor::from_slice(&[-1]).to_device(fused_qkv.device()));
             (fused_q, fused_k, fused_v)
         }
     }
@@ -429,15 +441,15 @@ impl Attention {
             let x = attn_output.view([batch_size, self.num_heads, q_length, self.head_dim]);
             let x = x.permute([0, 2, 1, 3]);
             let attn_output = x.reshape([batch_size, q_length, self.num_heads * self.head_dim]);
-            let attn_output = self.dense.forward(&attn_output);
+            let output_tensor = self.dense.forward(&attn_output);
 
-            (attn_output, present)
+            (output_tensor, present)
         } else {
             let alibi = alibi.as_ref().unwrap();
             let attention_mask_float = (attention_mask * 1.0)
                 .masked_fill(attention_mask, -1e9)
                 .to_kind(Kind::BFloat16);
-            let matmul_result = query_layer.matmul(&key_layer.transpose(1, 2));
+            let matmul_result = query_layer.matmul(&key_layer.transpose(-1, -2));
             let attention_scores =
                 matmul_result.view([batch_size, self.num_heads, q_length, kv_length]);
             let attention_scores = attention_scores.to_kind(Kind::Float);
@@ -653,11 +665,7 @@ impl RWModel {
         let mut h = Vec::<DecoderLayer>::with_capacity(config.get_num_hidden_layers() as usize);
 
         for i in 0..config.get_num_hidden_layers() {
-            h.push(DecoderLayer::new(
-                &(path / "h" / i),
-                config,
-                training,
-            ));
+            h.push(DecoderLayer::new(&(path / "h" / i), config, training));
         }
 
         let ln_f = layer_norm(
@@ -743,7 +751,7 @@ impl RWModel {
             }
             head_mask
         } else {
-            Tensor::from_slice(&vec![0; num_hidden_layers as usize])
+            Tensor::from_slice(&vec![0; num_hidden_layers as usize]).to_device(get_device())
         }
     }
 
