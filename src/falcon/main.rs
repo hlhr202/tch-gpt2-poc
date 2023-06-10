@@ -48,7 +48,7 @@ fn main() -> Result<(), anyhow::Error> {
 
     vs.load(path)?;
 
-    let prompt = " Girafatron is obsessed with giraffes, the most glorious animal on the face of this Earth. Giraftron believes all other animals are irrelevant when compared to the glorious majesty of the giraffe.\nDaniel: Hello, Girafatron!\nGirafatron:";
+    let prompt = "Hello my name is";
 
     let n_ctx = 256;
 

@@ -66,7 +66,7 @@ fn expand_mask(mask: &Tensor, tgt_length: &Option<i64>) -> Tensor {
         .to_kind(Kind::Bool)
         .logical_not();
 
-    expanded_mask.expand([batch_size, 1, tgt_length, tgt_length], false)
+    expanded_mask.expand([batch_size, 1, tgt_length, src_length], false)
 }
 
 fn build_abili_tensor(attention_mask: &Tensor, num_heads: i64, dtype: Kind) -> Tensor {
@@ -190,7 +190,7 @@ impl RoteryEmbedding {
     fn new(head_dim: i64, device: Device) -> Self {
         let base = 10000;
         let steps =
-            Tensor::arange_start_step(0, head_dim, 2, (Kind::Float, device)) / head_dim as f64;
+            Tensor::arange_start_step(0, head_dim, 2, (Kind::Float, device)) / (head_dim as f64);
 
         let base = Tensor::from_slice(&vec![base; steps.size()[0] as usize]).to_device(device);
 
@@ -368,9 +368,8 @@ impl Attention {
         let batch_size_and_num_heads = x.size()[0];
         let seq_length = x.size()[1];
         let batch_size = batch_size_and_num_heads / self.num_heads;
-        let x = x
-            .view((batch_size, self.num_heads, seq_length, self.head_dim))
-            .permute([0, 2, 1, 3]);
+        let x = x.view((batch_size, self.num_heads, seq_length, self.head_dim));
+        let x = x.permute([0, 2, 1, 3]);
         x.reshape([batch_size, seq_length, self.num_heads * self.head_dim])
     }
 
@@ -383,7 +382,7 @@ impl Attention {
         head_mask: &Option<Tensor>,
         use_cache: bool,
         output_attentions: bool,
-    ) -> (Tensor, Option<(Tensor, Tensor)>) {
+    ) -> (Tensor, Option<(Tensor, Tensor)>, Option<Tensor>) {
         let fused_qkv = self.query_key_value.forward(hidden_states);
         let (query_layer, key_layer, value_layer) = self.split_heads(&fused_qkv);
         let batch_size = query_layer.size()[0];
@@ -404,8 +403,7 @@ impl Attention {
         ]);
 
         let (query_layer, key_layer) = if let Some(rotary) = self.maybe_rotary.borrow_mut() {
-            let (query_layer, key_layer) = rotary.forward(&query_layer, &key_layer);
-            (query_layer, key_layer)
+            rotary.forward(&query_layer, &key_layer)
         } else {
             (query_layer, key_layer)
         };
@@ -443,7 +441,7 @@ impl Attention {
             let attn_output = x.reshape([batch_size, q_length, self.num_heads * self.head_dim]);
             let output_tensor = self.dense.forward(&attn_output);
 
-            (output_tensor, present)
+            (output_tensor, present, None)
         } else {
             let alibi = alibi.as_ref().unwrap();
             let attention_mask_float = (attention_mask * 1.0)
@@ -466,11 +464,11 @@ impl Attention {
             let context_layer = attention_probs_reshaped.matmul(&value_layer);
             let context_layer = self.merge_heads(&context_layer);
             let output_tensor = self.dense.forward(&context_layer);
-            let mut outputs = (output_tensor, present);
             if output_attentions {
-                outputs.0 += attention_probs;
+                (output_tensor, present, Some(attention_probs))
+            } else {
+                (output_tensor, present, None)
             }
-            outputs
         }
     }
 }
@@ -575,7 +573,7 @@ impl DecoderLayer {
         head_mask: &Option<Tensor>,
         use_cache: bool,
         output_attentions: bool,
-    ) -> (Tensor, Option<(Tensor, Tensor)>) {
+    ) -> (Tensor, Option<(Tensor, Tensor)>, Option<Tensor>) {
         let mut layernorm_output = self.input_layernorm.forward(hidden_states);
         let mut residual = hidden_states.shallow_clone();
 
@@ -609,6 +607,7 @@ impl DecoderLayer {
 
         // key value output
         let outputs = attn_outputs.1;
+        let attentions = attn_outputs.2;
 
         let mut mlp_output = self.mlp.forward(&layernorm_output);
 
@@ -625,9 +624,9 @@ impl DecoderLayer {
 
         // hidden_states, (present, attentions)
         if use_cache {
-            (output, outputs)
+            (output, outputs, attentions)
         } else {
-            (output, None::<(Tensor, Tensor)>)
+            (output, None::<(Tensor, Tensor)>, attentions)
         }
     }
 }
@@ -705,9 +704,7 @@ impl RWModel {
         let expanded_attn_mask = expand_mask(attention_mask, &Some(src_length));
 
         combined_attention_mask
-            .map(|combined_attention_mask| {
-                expanded_attn_mask.bitwise_or_tensor(&combined_attention_mask)
-            })
+            .map(|combined_attention_mask| expanded_attn_mask.logical_or(&combined_attention_mask))
             .unwrap_or(expanded_attn_mask)
     }
 
